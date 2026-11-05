@@ -2,6 +2,9 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import os
+import shutil
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -23,6 +26,22 @@ class SetupTests(unittest.TestCase):
         self.assertNotIn('nvme1n1p2', m.rules(['DATA-1']))
         with self.assertRaises(ValueError):
             m.rules(['bad"uuid'])
+
+    def test_worker_rejects_unselected_internal_partition(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            worker = root/'automount.sh'
+            shutil.copyfile(Path(__file__).with_name('automount.sh'), worker)
+            (root/'config.json').write_text(json.dumps({'internal_uuids': ['SHARE']}))
+            for name, output in [('lsblk', 'UNSELECTED'), ('udevadm', 'ID_BUS=nvme')]:
+                command = root/name
+                command.write_text('#!/bin/sh\nprintf "%s\\n" "' + output + '"\n')
+                command.chmod(0o755)
+            env = dict(os.environ, PATH=str(root)+':'+os.environ['PATH'], TARGET_USER='tester', TARGET_UID='1234', TARGET_GID='1234')
+            for action in ['add', 'retrigger']:
+                result = subprocess.run(['bash', str(worker), action, 'nvme0n1p10'], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('Ignoring unselected internal partition', result.stdout)
 
     def test_install_remove_twice(self):
         with tempfile.TemporaryDirectory() as t:

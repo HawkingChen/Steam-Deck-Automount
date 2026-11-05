@@ -24,6 +24,20 @@ ACTION=$1
 DEVBASE=$2
 DEVICE="/dev/${DEVBASE}"
 
+# Recheck policy in the worker as well as udev: stale rules or manual service
+# starts must never mount an unselected internal partition or add it to Steam.
+if [[ "$ACTION" == add || "$ACTION" == retrigger ]]; then
+    CONFIG="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/config.json"
+    UUID=$(lsblk -dnro UUID -- "$DEVICE")
+    PROPERTIES=$(udevadm info --query=property --name="$DEVICE")
+    if ! jq -e --arg uuid "$UUID" '.internal_uuids | index($uuid) != null' "$CONFIG" >/dev/null; then
+        if [[ "$DEVBASE" != mmcblk[0-9]* ]] && ! grep -qx 'ID_BUS=usb' <<< "$PROPERTIES"; then
+            echo "Ignoring unselected internal partition $DEVICE ($UUID)"
+            exit 0
+        fi
+    fi
+fi
+
 # Shared between this and the auto-mount script to ensure we're not double-triggering nor automounting while formatting
 # or vice-versa.
 MOUNT_LOCK="/var/run/jupiter-automount-${DEVBASE//\/_}.lock"
